@@ -2102,7 +2102,7 @@ function! fugitive#BufReadCmd(...) abort
         unlet b:fugitive_type
         setlocal noswapfile
         if empty(&bufhidden)
-          setlocal bufhidden=delete
+          setlocal bufhidden=hide
         endif
         if rev =~# '^:\d:'
           let &l:readonly = !filewritable(fugitive#Find('.git/index', dir))
@@ -2178,7 +2178,7 @@ function! fugitive#BufReadCmd(...) abort
       let modifiable = rev =~# '^:.:' && b:fugitive_type !=# 'tree'
       let &l:readonly = !modifiable || !filewritable(fugitive#Find('.git/index', dir))
       if empty(&bufhidden)
-        setlocal bufhidden=delete
+        setlocal bufhidden=hide
       endif
       let &l:modifiable = modifiable
       if b:fugitive_type !=# 'blob'
