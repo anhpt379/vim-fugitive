@@ -1010,8 +1010,15 @@ function! fugitive#Find(object, ...) abort
       endif
       if commit !~# '^[0-9a-f]\{40,\}$'
         let commit = matchstr(s:ChompDefault('', [dir, 'rev-parse', '--verify', commit . (len(file) ? '^{}' : ''), '--']), '\<[0-9a-f]\{40,\}\>')
+        if empty(commit) && len(file)
+          let commit = repeat('0', 40)
+        endif
       endif
-      let f = 'fugitive://' . dir . '//' . (len(commit) ? commit : repeat('0', 40)) . file
+      if len(commit)
+        let f = 'fugitive://' . dir . '//' . commit . file
+      else
+        let f = base . '/' . substitute(rev, '^:/:\=\|^[^:]\+:', '', '')
+      endif
     endif
   endif
   return FugitiveVimPath(f)
@@ -2147,7 +2154,7 @@ function! fugitive#BufReadCmd(...) abort
         if b:fugitive_display_format
           call s:ReplaceCmd([dir, 'cat-file', b:fugitive_type, rev])
         else
-          call s:ReplaceCmd([dir, 'show', '--no-color', '-m', '--first-parent', '--pretty=format:tree%x20%T%nparent%x20%P%nauthor%x20%an%x20<%ae>%x20%ad%ncommitter%x20%cn%x20<%ce>%x20%cd%nencoding%x20%e%n%n%s%n%n%b', rev])
+          call s:ReplaceCmd([dir, '-c', 'diff.noprefix=false', 'show', '--no-color', '-m', '--first-parent', '--pretty=format:tree%x20%T%nparent%x20%P%nauthor%x20%an%x20<%ae>%x20%ad%ncommitter%x20%cn%x20<%ce>%x20%cd%nencoding%x20%e%n%n%s%n%n%b', rev])
           keepjumps 1
           keepjumps call search('^parent ')
           if getline('.') ==# 'parent '
@@ -2294,21 +2301,21 @@ function! s:RunEdit(state, job) abort
   endif
 endfunction
 
-function! s:RunReceive(state, job, data, ...) abort
+function! s:RunReceive(state, type, job, data, ...) abort
   call add(a:state.log, a:data)
   let data = type(a:data) == type([]) ? join(a:data, "\n") : a:data
-  if has_key(a:state, 'buffer')
-    let data = remove(a:state, 'buffer') . data
-  endif
-  let escape = "\033]51;[^\007]*"
-  let a:state.escape_buffer = matchstr(data, escape . '$')
-  if len(a:state.escape_buffer)
-    let data = strpart(data, 0, len(data) - len(a:state.escape_buffer))
-  endif
-  let cmd = matchstr(data, escape . "\007")[5:-2]
-  let data = substitute(data, escape . "\007", '', 'g')
-  if cmd =~# '^fugitive:'
-    let a:state.request = strpart(cmd, 9)
+  if a:type ==# 'err' || a:state.pty
+    let data = a:state.escape_buffer . data
+    let escape = "\033]51;[^\007]*"
+    let a:state.escape_buffer = matchstr(data, escape . '$')
+    if len(a:state.escape_buffer)
+      let data = strpart(data, 0, len(data) - len(a:state.escape_buffer))
+    endif
+    let cmd = matchstr(data, escape . "\007")[5:-2]
+    let data = substitute(data, escape . "\007", '', 'g')
+    if cmd =~# '^fugitive:'
+      let a:state.request = strpart(cmd, 9)
+    endif
   endif
   let data = a:state.echo_buffer . data
   let a:state.echo_buffer = matchstr(data, "[\r\n]\\+$")
@@ -2568,11 +2575,12 @@ function! fugitive#Command(line1, line2, range, bang, mods, arg) abort
       let args = s:AskPassArgs(dir) + args
     endif
     let env.FUGITIVE_TEMP = state.temp
+    let env.FUGITIVE = state.temp
     let editor = 'sh ' . s:TempScript(
-          \ '[ -f "$FUGITIVE_TEMP.exit" ] && exit 1',
-          \ 'echo "$1" > "$FUGITIVE_TEMP.edit"',
-          \ 'printf "\033]51;fugitive:edit\007"',
-          \ 'while [ -f "$FUGITIVE_TEMP.edit" -a ! -f "$FUGITIVE_TEMP.exit" ]; do sleep 0.05 2>/dev/null || sleep 1; done',
+          \ '[ -f "$FUGITIVE.exit" ] && exit 1',
+          \ 'echo "$1" > "$FUGITIVE.edit"',
+          \ 'printf "\033]51;fugitive:edit\007" >&2',
+          \ 'while [ -f "$FUGITIVE.edit" -a ! -f "$FUGITIVE.exit" ]; do sleep 0.05 2>/dev/null || sleep 1; done',
           \ 'exit 0')
     call extend(env, {
           \ 'NO_COLOR': '1',
@@ -2590,7 +2598,8 @@ function! fugitive#Command(line1, line2, range, bang, mods, arg) abort
     if exists('*job_start')
       call extend(jobopts, {
             \ 'mode': 'raw',
-            \ 'callback': function('s:RunReceive', [state]),
+            \ 'out_cb': function('s:RunReceive', [state, 'out']),
+            \ 'err_cb': function('s:RunReceive', [state, 'err']),
             \ })
       if state.pty
         let jobopts.pty = 1
@@ -2600,8 +2609,8 @@ function! fugitive#Command(line1, line2, range, bang, mods, arg) abort
       let job = jobstart(argv, extend(jobopts, {
             \ 'pty': state.pty,
             \ 'TERM': 'dumb',
-            \ 'on_stdout': function('s:RunReceive', [state]),
-            \ 'on_stderr': function('s:RunReceive', [state]),
+            \ 'on_stdout': function('s:RunReceive', [state, 'out']),
+            \ 'on_stderr': function('s:RunReceive', [state, 'err']),
             \ }))
     endif
     let state.job = job
@@ -5616,7 +5625,7 @@ augroup fugitive_blame
   autocmd BufWinLeave * execute getwinvar(+bufwinnr(+expand('<abuf>')), 'fugitive_leave')
 augroup END
 
-" Section: :Gbrowse
+" Section: :GBrowse
 
 let s:redirects = {}
 
@@ -5629,7 +5638,7 @@ function! fugitive#BrowseCommand(line1, count, range, bang, mods, arg, args) abo
       if a:count >= 0
         return 'echoerr ' . string('fugitive: ''-'' no longer required to get persistent URL if range given')
       else
-        return 'echoerr ' . string('fugitive: use :0Gbrowse instead of :Gbrowse -')
+        return 'echoerr ' . string('fugitive: use :0GBrowse instead of :GBrowse -')
       endif
     elseif len(a:args)
       let remote = matchstr(join(a:args, ' '),'@\zs\%('.validremote.'\)$')
@@ -5820,7 +5829,7 @@ function! fugitive#BrowseCommand(line1, count, range, bang, mods, arg, args) abo
     endif
 
     if empty(url)
-      call s:throw("No Gbrowse handler installed for '".raw."'")
+      call s:throw("No GBrowse handler installed for '".raw."'")
     endif
 
     let url = s:gsub(url, '[ <>]', '\="%".printf("%02X",char2nr(submatch(0)))')
@@ -5831,14 +5840,18 @@ function! fugitive#BrowseCommand(line1, count, range, bang, mods, arg, args) abo
       return 'echomsg '.string(url)
     elseif exists(':Browse') == 2
       return 'echomsg '.string(url).'|Browse '.url
+    elseif exists(':OpenBrowser') == 2
+      return 'echomsg '.string(url).'|OpenBrowser '.url
     else
       if !exists('g:loaded_netrw')
         runtime! autoload/netrw.vim
       endif
       if exists('*netrw#BrowseX')
         return 'echomsg '.string(url).'|call netrw#BrowseX('.string(url).', 0)'
-      else
+      elseif exists('*netrw#NetrwBrowseX')
         return 'echomsg '.string(url).'|call netrw#NetrwBrowseX('.string(url).', 0)'
+      else
+        return 'echoerr ' . string('Netrw not found. Define your own :Browse to use :GBrowse')
       endif
     endif
   catch /^fugitive:/
