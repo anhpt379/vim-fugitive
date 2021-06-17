@@ -41,7 +41,7 @@ endfunction
 
 function! s:WinShellEsc(arg) abort
   if type(a:arg) == type([])
-    return join(map(copy(a:arg), 's:shellesc(v:val)'))
+    return join(map(copy(a:arg), 's:WinShellEsc(v:val)'))
   elseif a:arg =~# '^[A-Za-z0-9_/:.-]\+$'
     return a:arg
   else
@@ -1480,7 +1480,7 @@ function! fugitive#getfperm(url) abort
   return perm ==# '---------' ? '' : perm
 endfunction
 
-function s:UpdateIndex(dir, info) abort
+function! s:UpdateIndex(dir, info) abort
   let info = join(a:info[0:-2]) . "\t" . a:info[-1] . "\n"
   let [error, exec_error] = s:SystemError([a:dir, 'update-index', '--index-info'], info)
   return !exec_error ? '' : len(error) ? error : 'fugitive: unknown update-index error'
@@ -2993,9 +2993,19 @@ function! fugitive#Command(line1, line2, range, bang, mods, arg) abort
     return 'call fugitive#Resume()|silent checktime' . after
   elseif pager is# 1
     let pre = s:BuildEnvPrefix(env)
-    silent! execute '!' . escape(pre . s:UserCommand({'git': git, 'dir': dir}, s:disable_colors + flags + ['--no-pager'] + args), '!#%') .
-          \ (&shell =~# 'csh' ? ' >& ' . s:shellesc(state.file) : ' > ' . s:shellesc(state.file) . ' 2>&1')
-    let state.exit_status = v:shell_error
+    try
+      if exists('+guioptions') && &guioptions =~# '!'
+        let guioptions = &guioptions
+        set guioptions-=!
+      endif
+      silent! execute '!' . escape(pre . s:UserCommand({'git': git, 'dir': dir}, s:disable_colors + flags + ['--no-pager'] + args), '!#%') .
+            \ (&shell =~# 'csh' ? ' >& ' . s:shellesc(state.file) : ' > ' . s:shellesc(state.file) . ' 2>&1')
+      let state.exit_status = v:shell_error
+    finally
+      if exists('guioptions')
+        let &guioptions = guioptions
+      endif
+    endtry
     redraw!
     call s:RunSave(state)
     call s:RunFinished(state)
@@ -5487,8 +5497,6 @@ function! fugitive#Diffsplit(autodir, keepfocus, mods, arg, args) abort
       set diffopt-=vertical
     endif
     execute mods 'diffsplit' s:fnameescape(spec)
-    let &l:readonly = &l:readonly
-    redraw
     let w:fugitive_diff_restore = restore
     let winnr = winnr()
     if getwinvar('#', '&diff')
