@@ -10,6 +10,10 @@ let g:loaded_fugitive = 1
 
 let s:bad_git_dir = '/$\|^fugitive:'
 
+" FugitiveGitDir() returns the detected Git dir for the given buffer number,
+" or the current buffer if no argument is passed.  This will be an empty
+" string if no Git dir was found.  Use !empty(FugitiveGitDir()) to check if
+" Fugitive is active in the current buffer.
 function! FugitiveGitDir(...) abort
   if v:version < 704
     return ''
@@ -95,9 +99,11 @@ function! FugitiveParse(...) abort
 endfunction
 
 " FugitiveResult() returns an object encapsulating the result of the most
-" recend :Git command.  Will be empty if no result is available.  Pass in the
-" name of a temp buffer to get the result object for that command instead.
-" Contains the following keys:
+" recent :Git command.  Will be empty if no result is available.  During a
+" User FugitiveChanged event, this is guaranteed to correspond to the :Git
+" command that triggered the event, or be empty if :Git was not the trigger.
+" Pass in the name of a temp buffer to get the result object for that command
+" instead.  Contains the following keys:
 "
 " * "args": List of command arguments, starting with the subcommand.  Will be
 "   empty for usages like :Git --help.
@@ -127,13 +133,17 @@ endfunction
 " when performing multiple config queries.  Do not rely on the internal
 " structure of the return value as it is not guaranteed.  If you want a full
 " dictionary of every config value, use FugitiveConfigGetRegexp('.*').
+"
+" An optional argument provides the Git dir, or the buffer number of a
+" buffer with a Git dir.  The default is the current buffer.  Pass a blank
+" string to limit to the global config.
 function! FugitiveConfig(...) abort
   return call('fugitive#Config', a:000)
 endfunction
 
 " FugitiveConfigGet() retrieves a Git configuration value.  An optional second
-" argument provides the Git dir as with FugitiveFind().  Pass a blank string
-" to limit to the global config.
+" argument can be either the object returned by FugitiveConfig(), or a Git
+" dir or buffer number to be passed along to FugitiveConfig().
 function! FugitiveConfigGet(name, ...) abort
   return get(call('FugitiveConfigGetAll', [a:name] + (a:0 ? [a:1] : [])), 0, get(a:, 2, ''))
 endfunction
@@ -152,10 +162,24 @@ function! FugitiveConfigGetRegexp(pattern, ...) abort
   return call('fugitive#ConfigGetRegexp', [a:pattern] + a:000)
 endfunction
 
+" FugitiveRemoteUrl() retrieves the remote URL for the given remote name,
+" defaulting to the current branch's remote or "origin" if no argument is
+" given.  Similar to `git remote get-url`, but also attempts to resolve HTTP
+" redirects and SSH host aliases.
+"
+" An optional second argument provides the Git dir, or the buffer number of a
+" buffer with a Git dir.  The default is the current buffer.
 function! FugitiveRemoteUrl(...) abort
-  return fugitive#RemoteUrl(a:0 ? a:1 : '', FugitiveGitDir(a:0 > 1 ? a:2 : -1), a:0 > 2 ? a:3 : 0)
+  return fugitive#RemoteUrl(a:0 ? a:1 : '', a:0 > 1 ? a:2 : -1, a:0 > 2 ? a:3 : 0)
 endfunction
 
+" FugitiveHead() retrieves the name of the current branch. If the current HEAD
+" is detached, FugitiveHead() will return the empty string, unless the
+" optional argument is given, in which case the hash of the current commit
+" will be truncated to the given number of characters.
+"
+" An optional second argument provides the Git dir, or the buffer number of a
+" buffer with a Git dir.  The default is the current buffer.
 function! FugitiveHead(...) abort
   let dir = FugitiveGitDir(a:0 > 1 ? a:2 : -1)
   if empty(dir)
