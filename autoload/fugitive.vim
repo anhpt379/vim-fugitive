@@ -474,7 +474,7 @@ function! s:BuildEnvPrefix(env) abort
   let env = items(a:env)
   if empty(env)
     return ''
-  elseif &shell =~? '\%(powershell\|pwsh\)\%(\.exe\)\=$'
+  elseif &shell =~# '\%(powershell\|pwsh\)\%(\.exe\)\=$'
     return join(map(env, '"$Env:" . v:val[0] . " = ''" . substitute(v:val[1], "''", "''''", "g") . "''; "'), '')
   elseif s:winshell()
     return join(map(env, '"set " . substitute(join(v:val, "="), "[&|<>^]", "^^^&", "g") . "& "'), '')
@@ -520,6 +520,7 @@ function! fugitive#Prepare(...) abort
 endfunction
 
 function! s:SystemError(cmd, ...) abort
+  let cmd = type(a:cmd) == type([]) ? s:shellesc(a:cmd) : a:cmd
   try
     if &shellredir ==# '>' && &shell =~# 'sh\|cmd'
       let shellredir = &shellredir
@@ -533,13 +534,13 @@ function! s:SystemError(cmd, ...) abort
       let guioptions = &guioptions
       set guioptions-=!
     endif
-    let out = call('system', [type(a:cmd) == type([]) ? s:shellesc(a:cmd) : a:cmd] + a:000)
+    let out = call('system', [cmd] + a:000)
     return [out, v:shell_error]
   catch /^Vim\%((\a\+)\)\=:E484:/
     let opts = ['shell', 'shellcmdflag', 'shellredir', 'shellquote', 'shellxquote', 'shellxescape', 'shellslash']
     call filter(opts, 'exists("+".v:val) && !empty(eval("&".v:val))')
     call map(opts, 'v:val."=".eval("&".v:val)')
-    call s:throw('failed to run `' . a:cmd . '` with ' . join(opts, ' '))
+    call s:throw('failed to run `' . cmd . '` with ' . join(opts, ' '))
   finally
     if exists('shellredir')
       let &shellredir = shellredir
@@ -1645,11 +1646,12 @@ function! s:TempCmd(out, cmd) abort
   try
     let cmd = (type(a:cmd) == type([]) ? fugitive#Prepare(a:cmd) : a:cmd)
     let redir = ' > ' . a:out
-    if s:winshell() && !has('nvim')
+    let pwsh = &shell =~# '\%(powershell\|pwsh\)\%(\.exe\)\=$'
+    if pwsh && has('patch-8.2.3079')
+      return s:SystemError(&shell . ' ' . &shellcmdflag . ' ' . s:shellesc(cmd . redir))
+    elseif (s:winshell() || pwsh) && !has('nvim')
       let cmd_escape_char = &shellxquote == '(' ?  '^' : '^^^'
       return s:SystemError('cmd /c "' . s:gsub(cmd, '[<>%]', cmd_escape_char . '&') . redir . '"')
-    elseif &shell =~? '\%(powershell\|pwsh\)\%(\.exe\)\=$'
-      return s:SystemError(&shell . ' ' . &shellcmdflag . ' ' . s:shellesc(cmd . redir))
     elseif &shell =~# 'fish'
       return s:SystemError(' begin;' . cmd . redir . ';end ')
     else
@@ -2369,7 +2371,7 @@ function! fugitive#FileReadCmd(...) abort
 endfunction
 
 function! fugitive#FileWriteCmd(...) abort
-  let tmp = tempname()
+  let temp = tempname()
   let amatch = a:0 ? a:1 : expand('<amatch>')
   let autype = a:0 > 1 ? 'Buf' : 'File'
   if exists('#' . autype . 'WritePre')
@@ -2380,17 +2382,13 @@ function! fugitive#FileWriteCmd(...) abort
     if commit !~# '^[0-3]$' || !v:cmdbang && (line("'[") != 1 || line("']") != line('$'))
       return "noautocmd '[,']write" . (v:cmdbang ? '!' : '') . ' ' . s:fnameescape(amatch)
     endif
-    if exists('+guioptions') && &guioptions =~# '!'
-      let guioptions = &guioptions
-      set guioptions-=!
-    endif
-    silent execute "'[,']write !".fugitive#Prepare(dir, 'hash-object', '-w', '--stdin', '--').' > '.tmp
-    let sha1 = readfile(tmp)[0]
+    silent execute "noautocmd keepalt '[,']write ".temp
+    let hash = s:TreeChomp([dir, 'hash-object', '-w', '--', temp])
     let old_mode = matchstr(s:ChompError(['ls-files', '--stage', '.' . file], dir)[0], '^\d\+')
     if empty(old_mode)
       let old_mode = executable(s:Tree(dir) . file) ? '100755' : '100644'
     endif
-    let error = s:UpdateIndex(dir, [old_mode, sha1, commit, file[1:-1]])
+    let error = s:UpdateIndex(dir, [old_mode, hash, commit, file[1:-1]])
     if empty(error)
       setlocal nomodified
       if exists('#' . autype . 'WritePost')
@@ -2400,11 +2398,10 @@ function! fugitive#FileWriteCmd(...) abort
     else
       return 'echoerr '.string('fugitive: '.error)
     endif
+  catch /^fugitive:/
+    return 'echoerr ' . string(v:exception)
   finally
-    if exists('guioptions')
-      let &guioptions = guioptions
-    endif
-    call delete(tmp)
+    call delete(temp)
   endtry
 endfunction
 
