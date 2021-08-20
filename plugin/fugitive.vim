@@ -125,14 +125,17 @@ function! FugitiveResult(...) abort
   return call('fugitive#Result', a:000)
 endfunction
 
-" FugitivePrepare() constructs a Git command string which can be executed with
-" functions like system() and commands like :!.  Integer arguments will be
-" treated as buffer numbers, and the appropriate relative path inserted in
-" their place.
+" FugitiveShellCommand() turns an array of arugments into a Git command string
+" which can be executed with functions like system() and commands like :!.
+" Integer arguments will be treated as buffer numbers, and the appropriate
+" relative path inserted in their place.
 "
-" If the first argument is a string that looks like a path or an empty string,
-" it will be used as the Git dir.  If it's a buffer number, the Git dir for
-" that buffer will be used.  The default is the current buffer.
+" An optional second argument provides the Git dir, or the buffer number of a
+" buffer with a Git dir.  The default is the current buffer.
+function! FugitiveShellCommand(...) abort
+  return call('fugitive#ShellCommand', a:000)
+endfunction
+
 function! FugitivePrepare(...) abort
   return call('fugitive#ShellCommand', a:000)
 endfunction
@@ -299,7 +302,13 @@ function! s:CeilingDirectories() abort
 endfunction
 
 function! FugitiveExtractGitDir(path) abort
-  let path = s:Slash(a:path)
+  if type(a:path) ==# type({})
+    return get(a:path, 'git_dir', '')
+  elseif type(a:path) == type(0)
+    let path = s:Slash(a:path >= 0 ? bufname(a:path) : bufname(''))
+  else
+    let path = s:Slash(a:path)
+  endif
   if path =~# '^fugitive:'
     return matchstr(path, '\C^fugitive:\%(//\)\=\zs.\{-\}\ze\%(//\|::\|$\)')
   elseif empty(path)
@@ -355,7 +364,7 @@ function! FugitiveExtractGitDir(path) abort
   return ''
 endfunction
 
-function! FugitiveDetect(path) abort
+function! FugitiveDetect(...) abort
   if v:version < 704
     return ''
   endif
@@ -363,7 +372,7 @@ function! FugitiveDetect(path) abort
     unlet b:git_dir
   endif
   if !exists('b:git_dir')
-    let b:git_dir = FugitiveExtractGitDir(a:path)
+    let b:git_dir = FugitiveExtractGitDir(a:0 ? a:1 : bufnr(''))
   endif
   if empty(b:git_dir) || !exists('#User#Fugitive')
     return ''
@@ -546,7 +555,7 @@ augroup fugitive
         \    setlocal foldtext=fugitive#Foldtext() |
         \ endif
   autocmd FileType fugitive
-        \ call fugitive#MapCfile('fugitive#StatusCfile()')
+        \ call fugitive#MapCfile('fugitive#PorcelainCfile()')
   autocmd FileType gitrebase
         \ let &l:include = '^\%(pick\|squash\|edit\|reword\|fixup\|drop\|[pserfd]\)\>' |
         \ if &l:includeexpr !~# 'Fugitive' |
