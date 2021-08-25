@@ -16,9 +16,9 @@ let s:bad_git_dir = '/$\|^fugitive:'
 " Fugitive is active in the current buffer.  Do not rely on this for direct
 " filesystem access; use FugitiveFind('.git/whatever') instead.
 function! FugitiveGitDir(...) abort
-  if v:version < 704
+  if v:version < 703
     return ''
-  elseif !a:0 || type(a:1) == type(0) && a:1 < 0
+  elseif !a:0 || type(a:1) == type(0) && a:1 < 0 || a:1 is# get(v:, 'true', -1)
     if exists('g:fugitive_event')
       return g:fugitive_event
     endif
@@ -30,7 +30,7 @@ function! FugitiveGitDir(...) abort
       return b:git_dir
     endif
     return dir =~# s:bad_git_dir ? '' : dir
-  elseif type(a:1) == type(0)
+  elseif type(a:1) == type(0) && a:1 isnot# 0
     if a:1 == bufnr('') && (!exists('b:git_dir') || b:git_dir =~# s:bad_git_dir) && empty(&buftype)
       let b:git_dir = FugitiveExtractGitDir(expand('%:p'))
     endif
@@ -55,7 +55,11 @@ endfunction
 " exists, call FooReal("foo://bar").
 function! FugitiveReal(...) abort
   let file = a:0 ? a:1 : @%
-  if file =~# '^\a\a\+:' || a:0 > 1
+  if type(file) ==# type({})
+    let dir = FugitiveGitDir(file)
+    let tree = s:Tree(dir)
+    return FugitiveVimPath(empty(tree) ? dir : tree)
+  elseif file =~# '^\a\a\+:' || a:0 > 1
     return call('fugitive#Real', [file] + a:000[1:-1])
   elseif file =~# '^/\|^\a:\|^$'
     return file
@@ -72,22 +76,10 @@ endfunction
 " An optional second argument provides the Git dir, or the buffer number of a
 " buffer with a Git dir.  The default is the current buffer.
 function! FugitiveFind(...) abort
-  if a:0 && type(a:1) ==# type({})
+  if a:0 && (type(a:1) ==# type({}) || type(a:1) ==# type(0))
     return call('fugitive#Find', a:000[1:-1] + [FugitiveGitDir(a:1)])
   else
     return fugitive#Find(a:0 ? a:1 : bufnr(''), FugitiveGitDir(a:0 > 1 ? a:2 : -1))
-  endif
-endfunction
-
-function! FugitivePath(...) abort
-  if a:0 > 2 && type(a:1) ==# type({})
-    return fugitive#Path(a:2, a:3, FugitiveGitDir(a:1))
-  elseif a:0 && type(a:1) ==# type({})
-    return FugitiveReal(a:0 > 1 ? a:2 : @%)
-  elseif a:0 > 1
-    return fugitive#Path(a:1, a:2, FugitiveGitDir(a:0 > 2 ? a:3 : -1))
-  else
-    return FugitiveReal(a:0 ? a:1 : @%)
   endif
 endfunction
 
@@ -193,7 +185,7 @@ endfunction
 " An optional second argument provides the Git dir, or the buffer number of a
 " buffer with a Git dir.  The default is the current buffer.
 function! FugitiveHead(...) abort
-  if a:0 && type(a:1) ==# type({})
+  if a:0 && (type(a:1) ==# type({}) || type(a:1) ==# type('') && a:1 !~# '^\d\+$')
     let dir = FugitiveGitDir(a:1)
     let arg = get(a:, 2, 0)
   elseif a:0 > 1
@@ -207,6 +199,18 @@ function! FugitiveHead(...) abort
     return ''
   endif
   return fugitive#Head(arg, dir)
+endfunction
+
+function! FugitivePath(...) abort
+  if a:0 > 2 && type(a:1) ==# type({})
+    return fugitive#Path(a:2, a:3, FugitiveGitDir(a:1))
+  elseif a:0 && type(a:1) ==# type({})
+    return FugitiveReal(a:0 > 1 ? a:2 : @%)
+  elseif a:0 > 1
+    return fugitive#Path(a:1, a:2, FugitiveGitDir(a:0 > 2 ? a:3 : -1))
+  else
+    return FugitiveReal(a:0 ? a:1 : @%)
+  endif
 endfunction
 
 function! FugitiveStatusline(...) abort
@@ -365,7 +369,7 @@ function! FugitiveExtractGitDir(path) abort
 endfunction
 
 function! FugitiveDetect(...) abort
-  if v:version < 704
+  if v:version < 703
     return ''
   endif
   if exists('b:git_dir') && b:git_dir =~# '^$\|' . s:bad_git_dir
@@ -519,7 +523,7 @@ if exists(':Gbrowse') != 2 && get(g:, 'fugitive_legacy_commands', 1)
         \ '|if <bang>1|redraw!|endif|echohl WarningMSG|echomsg ":Gbrowse is deprecated in favor of :GBrowse"|echohl NONE'
 endif
 
-if v:version < 704
+if v:version < 703
   finish
 endif
 
