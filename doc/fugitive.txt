@@ -37,11 +37,11 @@ that are part of Git repositories).
 
                                                 *:Git_--paginate* *:Git_-p*
 :Git --paginate {args}  Run an arbitrary git command, capture output to a temp
-:Git -p {args}          file, and |:split| that temp file.  Use :0Git to
-                        |:edit| the temp file instead.  A temp file is always
-                        used for commands like diff and log that typically
-                        uses a pager, and for any command that has the
-                        pager.<cmd> Git configuration option set.
+:Git -p {args}          file, and |:split| that temp file.  Pass ++curwin as
+                        the first argument to |:edit| the temp file instead.
+                        A temp file is always used for commands like diff and
+                        log that typically uses a pager, and for any command
+                        that has the pager.<cmd> Git configuration option set.
 
 :{range}Git! --paginate {args}
 :{range}Git! -p {args}  Run an arbitrary git command, and insert the output
@@ -98,9 +98,13 @@ that are part of Git repositories).
                                                 *:Git_mergetool*
 :Git mergetool [args]   Like |:Git_difftool|, but target merge conflicts.
 
-                                                *:Ggrep* *:Gcgrep* *:Git_grep*
+                                                *:Ggrep* *:Git_grep*
 :Ggrep[!] [args]        An approximation of |:grep|[!] with git-grep as
 :Git[!] grep -O [args]  'grepprg'.
+
+:Ggrep[!] --quiet [args]
+:Ggrep[!] -q [args]     Like |:Ggrep|, but instead of displaying output, open
+                        the quickfix list.
 
                                                 *:Glgrep*
 :Glgrep[!] [args]       :Ggrep but for |:lgrep|.
@@ -185,10 +189,9 @@ that are part of Git repositories).
                         commit is given, the current file in that commit.
                         With no argument, the version in the index or work
                         tree is used, and the work tree version is always
-                        placed to the right or bottom.  A vertical split is
-                        used if space permits, and if 'diffopt' does not
-                        otherwise specify.  Use Vim's |do| and |dp| to stage
-                        and unstage changes.
+                        placed to the right or bottom, depending on available
+                        width.  Use Vim's |do| and |dp| to stage and unstage
+                        changes.
 
                                                 *:Gdiffsplit!*
 :Gdiffsplit!            Diff against any and all direct ancestors, retaining
@@ -205,7 +208,10 @@ that are part of Git repositories).
 :Gvdiffsplit [object]   Like |:Gdiffsplit|, but always split vertically.
 
                                                 *:Ghdiffsplit*
-:Ghdiffsplit [object]   Like |:Gdiffsplit|, but always split horizontally.
+:Gdiffsplit ++novertical [object]
+:Ghdiffsplit [object]   Like |:Gdiffsplit|, but with "vertical" removed from
+                        'diffopt'.  The split will still be vertical if
+                        combined with |:vertical|.
 
                                                 *:GMove*
 :GMove {destination}    Wrapper around git-mv that renames the buffer
