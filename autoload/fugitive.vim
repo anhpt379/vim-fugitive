@@ -3269,7 +3269,17 @@ function! s:RunEdit(state, tmp, job) abort
   call remove(a:state, 'request')
   let sentinel = a:state.file . '.edit'
   let file = FugitiveVimPath(readfile(sentinel, '', 1)[0])
-  exe substitute(a:state.mods, '\<tab\>', '-tab', 'g') 'keepalt split' s:fnameescape(file)
+  try
+    if !&equalalways && a:state.mods !~# '\<tab\>' && 3 > (a:state.mods =~# '\<vert' ? winwidth(0) : winheight(0))
+      let noequalalways = 1
+      setglobal equalalways
+    endif
+    exe substitute(a:state.mods, '\<tab\>', '-tab', 'g') 'keepalt split' s:fnameescape(file)
+  finally
+    if exists('l:noequalalways')
+      setglobal noequalalways
+    endif
+  endtry
   set bufhidden=wipe
   let bufnr = bufnr('')
   let s:edit_jobs[bufnr] = [a:state, a:tmp, a:job, sentinel]
@@ -3515,9 +3525,10 @@ if !exists('s:resume_queue')
 endif
 function! fugitive#Resume() abort
   while len(s:resume_queue)
-    if s:resume_queue[0][2] isnot# ''
+    let enqueued = remove(s:resume_queue, 0)
+    if enqueued[2] isnot# ''
       try
-        call call('s:RunWait', remove(s:resume_queue, 0))
+        call call('s:RunWait', enqueued)
       endtry
     endif
   endwhile
@@ -3537,7 +3548,7 @@ function! s:RunBufDelete(bufnr) abort
   endif
   if has_key(s:edit_jobs, a:bufnr) |
     call add(s:resume_queue, remove(s:edit_jobs, a:bufnr))
-    call feedkeys(":redraw!|call delete(" . string(s:resume_queue[-1][0].file . '.edit') .
+    call feedkeys("\<C-\>\<C-N>:redraw!|call delete(" . string(s:resume_queue[-1][0].file . '.edit') .
           \ ")|call fugitive#Resume()|silent checktime\r", 'n')
   endif
 endfunction
@@ -6493,7 +6504,7 @@ function! fugitive#Diffsplit(autodir, keepfocus, mods, arg, ...) abort
     return 'echoerr ' . string(v:exception)
   finally
     if exists('l:equalalways')
-      let &l:equalalways = equalalways
+      let &g:equalalways = equalalways
     endif
     if exists('diffopt')
       let &diffopt = diffopt
