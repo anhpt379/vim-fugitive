@@ -341,7 +341,7 @@ function! s:JobExecute(argv, jopts, stdin, callback, ...) abort
       call chansend(dict.job, a:stdin)
       call chanclose(dict.job, 'stdin')
     endif
-  elseif exists('*job_start')
+  elseif exists('*ch_close_in')
     let temp = tempname()
     call extend(a:jopts, {
           \ 'out_io': 'file',
@@ -392,7 +392,7 @@ endfunction
 
 " Section: Git
 
-let s:run_jobs = (exists('*job_start') || exists('*jobstart')) && exists('*bufwinid')
+let s:run_jobs = (exists('*ch_close_in') || exists('*jobstart')) && exists('*bufwinid')
 
 function! s:GitCmd() abort
   if !exists('g:fugitive_git_executable')
@@ -790,7 +790,7 @@ function! s:SystemList(cmd) abort
       call remove(lines, -1)
     endif
     return [lines, exit[0]]
-  elseif exists('*job_start')
+  elseif exists('*ch_close_in')
     let lines = []
     let jopts = {
           \ 'out_cb': { j, str -> add(lines, str) },
@@ -904,7 +904,7 @@ function! s:StdoutToFile(out, cmd, ...) abort
       call writefile(jopts.stdout, a:out, 'b')
     endif
     return [join(jopts.stderr, "\n"), exit[0]]
-  elseif exists('*job_start')
+  elseif exists('*ch_close_in')
     try
       let err = tempname()
       call extend(jopts, {
@@ -2528,7 +2528,7 @@ function! s:ReplaceCmd(cmd) abort
 endfunction
 
 function! s:QueryLog(refspec, limit) abort
-  let lines = s:LinesError(['log', '-n', '' . a:limit, '--pretty=format:%h%x09%s', a:refspec, '--'])[0]
+  let lines = s:LinesError(['log', '-n', '' . a:limit, '--pretty=format:%h%x09%s'] + a:refspec + ['--'])[0]
   call map(lines, 'split(v:val, "\t", 1)')
   call map(lines, '{"type": "Log", "commit": v:val[0], "subject": join(v:val[1 : -1], "\t")}')
   return lines
@@ -2578,9 +2578,9 @@ function! s:AddSection(label, lines, ...) abort
   call append(line('$'), ['', a:label . (len(note) ? ': ' . note : ' (' . len(a:lines) . ')')] + s:Format(a:lines))
 endfunction
 
-function! s:AddLogSection(label, a, b) abort
+function! s:AddLogSection(label, refspec) abort
   let limit = 256
-  let log = s:QueryLog(a:a . '..' . a:b, limit)
+  let log = s:QueryLog(a:refspec, limit)
   if empty(log)
     return
   elseif len(log) == limit
@@ -2846,16 +2846,19 @@ function! fugitive#BufReadStatus(...) abort
     let staged_end = len(staged) ? line('$') : 0
 
     if len(push) && !(push ==# pull && get(props, 'branch.ab') =~# '^+0 ')
-      call s:AddLogSection('Unpushed to ' . push, push, head)
+      call s:AddLogSection('Unpushed to ' . push, [push . '..' . head])
     endif
     if len(pull) && push !=# pull
-      call s:AddLogSection('Unpushed to ' . pull, pull, head)
+      call s:AddLogSection('Unpushed to ' . pull, [pull . '..' . head])
+    endif
+    if empty(pull) && empty(push) && empty(rebasing)
+      call s:AddLogSection('Unpushed to *', [head, '--not', '--remotes'])
     endif
     if len(push) && push !=# pull
-      call s:AddLogSection('Unpulled from ' . push, head, push)
+      call s:AddLogSection('Unpulled from ' . push, [head . '..' . push])
     endif
     if len(pull) && get(props, 'branch.ab') !~# ' -0$'
-      call s:AddLogSection('Unpulled from ' . pull, head, pull)
+      call s:AddLogSection('Unpulled from ' . pull, [head . '..' . pull])
     endif
 
     setlocal nomodified readonly noswapfile
@@ -3809,7 +3812,7 @@ function! fugitive#Command(line1, line2, range, bang, mods, arg) abort
     if has_key(tmp, 'echo')
       echo ""
     endif
-    if exists('*job_start')
+    if exists('*ch_close_in')
       call extend(jobopts, {
             \ 'mode': 'raw',
             \ 'out_cb': function('s:RunReceive', [state, tmp, 'out']),
@@ -5036,6 +5039,9 @@ function! s:DoStageUnpushedHeading(heading) abort
     let remote = '.'
   endif
   let branch = matchstr(a:heading, 'to \%([^/]\+/\)\=\zs\S\+')
+  if branch ==# '*'
+    return
+  endif
   call feedkeys(':Git push ' . remote . ' ' . '@:' . 'refs/heads/' . branch)
 endfunction
 
@@ -5049,6 +5055,9 @@ function! s:DoStageUnpushed(record) abort
     let remote = '.'
   endif
   let branch = matchstr(a:record.heading, 'to \%([^/]\+/\)\=\zs\S\+')
+  if branch ==# '*'
+    return
+  endif
   call feedkeys(':Git push ' . remote . ' ' . a:record.commit . ':' . 'refs/heads/' . branch)
 endfunction
 
