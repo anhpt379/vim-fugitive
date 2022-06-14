@@ -72,14 +72,11 @@ function! s:shellesc(arg) abort
   endif
 endfunction
 
-let s:fnameescape = " \t\n*?[{`$\\%#'\"|!<"
 function! s:fnameescape(file) abort
   if type(a:file) == type([])
     return join(map(copy(a:file), 's:fnameescape(v:val)'))
-  elseif exists('*fnameescape')
-    return fnameescape(a:file)
   else
-    return escape(a:file, s:fnameescape)
+    return fnameescape(a:file)
   endif
 endfunction
 
@@ -88,8 +85,8 @@ function! s:throw(string) abort
 endfunction
 
 function! s:VersionCheck() abort
-  if v:version < 703
-    return 'return ' . string('echoerr "fugitive: Vim 7.3 or newer required"')
+  if v:version < 704
+    return 'return ' . string('echoerr "fugitive: Vim 7.4 or newer required"')
   elseif empty(fugitive#GitVersion())
     let exe = get(s:GitCmd(), 0, '')
     if len(exe) && !executable(exe)
@@ -202,6 +199,19 @@ function! s:cpath(path, ...) abort
   return a:0 ? path ==# s:cpath(a:1) : path
 endfunction
 
+let s:quote_chars = {
+      \ "\007": 'a', "\010": 'b', "\011": 't', "\012": 'n', "\013": 'v', "\014": 'f', "\015": 'r',
+      \ '"': '"', '\': '\'}
+
+function! s:Quote(string) abort
+  let string = substitute(a:string, "[\001-\037\"\\\177]", '\="\\" . get(s:quote_chars, submatch(0), printf("%03o", char2nr(submatch(0))))', 'g')
+  if string !=# a:string
+    return '"' . string . '"'
+  else
+    return string
+  endif
+endfunction
+
 let s:executables = {}
 
 function! s:executable(binary) abort
@@ -227,21 +237,13 @@ function! s:TempScript(...) abort
 endfunction
 
 function! s:DoAutocmd(...) abort
-  if v:version >= 704 || (v:version == 703 && has('patch442'))
-    return join(map(copy(a:000), "'doautocmd <nomodeline>' . v:val"), '|')
-  elseif &modelines > 0
-    return 'try|set modelines=0|' . join(map(copy(a:000), "'doautocmd ' . v:val"), '|') . '|finally|set modelines=' . &modelines . '|endtry'
-  else
-    return join(map(copy(a:000), "'doautocmd ' . v:val"), '|')
-  endif
+  return join(map(copy(a:000), "'doautocmd <nomodeline>' . v:val"), '|')
 endfunction
-
-let s:nowait = v:version >= 704 ? '<nowait>' : ''
 
 function! s:Map(mode, lhs, rhs, ...) abort
   let maps = []
   let defer = a:0 && a:1 =~# '<unique>' || get(g:, 'fugitive_defer_to_existing_maps')
-  let flags = substitute(a:0 ? a:1 : '', '<unique>', '', '') . (a:rhs =~# '<Plug>' ? '' : '<script>') . s:nowait
+  let flags = substitute(a:0 ? a:1 : '', '<unique>', '', '') . (a:rhs =~# '<Plug>' ? '' : '<script>') . '<nowait>'
   for mode in split(a:mode, '\zs')
     if a:0 <= 1
       call add(maps, mode.'map <buffer>' . substitute(flags, '<unique>', '', '') . ' <Plug>fugitive:' . a:lhs . ' ' . a:rhs)
@@ -518,6 +520,10 @@ function! s:GitDir(...) abort
   return a:0 ? FugitiveGitDir(a:1) : FugitiveGitDir()
 endfunction
 
+function! s:InitializeBuffer(repo) abort
+  let b:git_dir = s:GitDir(a:repo)
+endfunction
+
 function! s:SameRepo(one, two) abort
   let one = s:GitDir(a:one)
   return !empty(one) && one ==# s:GitDir(a:two)
@@ -578,11 +584,19 @@ function! s:PreparePathArgs(cmd, dir, literal, explicit) abort
   return a:cmd
 endfunction
 
+let s:git_index_file_env = {}
+function! s:GitIndexFileEnv() abort
+  if $GIT_INDEX_FILE =~# '^/\|^\a:' && !has_key(s:git_index_file_env, $GIT_INDEX_FILE)
+    let s:git_index_file_env[$GIT_INDEX_FILE] = s:Slash(FugitiveVimPath($GIT_INDEX_FILE))
+  endif
+  return get(s:git_index_file_env, $GIT_INDEX_FILE, '')
+endfunction
+
 function! s:PrepareEnv(env, dir) abort
   if len($GIT_INDEX_FILE) && len(s:Tree(a:dir)) && !has_key(a:env, 'GIT_INDEX_FILE')
-    let index_dir = substitute($GIT_INDEX_FILE, '[^/]\+$', '', '')
+    let index_dir = substitute(s:GitIndexFileEnv(), '[^/]\+$', '', '')
     let our_dir = fugitive#Find('.git/', a:dir)
-    if !s:cpath(index_dir, our_dir) && !s:cpath(resolve(FugitiveVimPath(index_dir)), our_dir)
+    if !s:cpath(index_dir, our_dir) && !s:cpath(resolve(index_dir), our_dir)
       let a:env['GIT_INDEX_FILE'] = FugitiveGitPath(fugitive#Find('.git/index', a:dir))
     endif
   endif
@@ -837,10 +851,6 @@ function! fugitive#ShellCommand(...) abort
   return s:BuildShell(dir, env, git, flags + args)
 endfunction
 
-function! fugitive#Prepare(...) abort
-  return call('fugitive#ShellCommand', a:000)
-endfunction
-
 function! s:SystemError(cmd, ...) abort
   let cmd = type(a:cmd) == type([]) ? s:shellesc(a:cmd) : a:cmd
   try
@@ -959,7 +969,7 @@ function! fugitive#Head(...) abort
   if empty(dir)
     return ''
   endif
-  let file = fugitive#Find('.git/HEAD', dir)
+  let file = FugitiveActualDir() . '/HEAD'
   let ftime = getftime(file)
   if ftime == -1
     return ''
@@ -979,10 +989,6 @@ function! fugitive#Head(...) abort
   else
     return ''
   endif
-endfunction
-
-function! fugitive#head(...) abort
-  throw 'Third party code is using fugitive#head() which has been removed. Change it to FugitiveHead()'
 endfunction
 
 function! fugitive#RevParse(rev, ...) abort
@@ -1532,53 +1538,33 @@ endfunction
 " Section: Repository Object
 
 let s:repo_prototype = {}
-let s:repos = {}
 
 function! fugitive#repo(...) abort
-  let dir = a:0 ? s:GitDir(a:1) : (len(s:GitDir()) ? s:GitDir() : FugitiveExtractGitDir(expand('%:p')))
-  if dir !=# ''
-    if has_key(s:repos, dir)
-      let repo = get(s:repos, dir)
-    else
-      let repo = {'git_dir': dir}
-      let s:repos[dir] = repo
-    endif
-    return extend(repo, s:repo_prototype, 'keep')
-  endif
-  call s:throw('not a Git repository')
+  return copy(s:repo_prototype)
 endfunction
 
 function! s:repo_dir(...) dict abort
-  return join([self.git_dir]+a:000,'/')
+  throw 'fugitive: fugitive#repo().dir() has been replaced by FugitiveGitDir()'
 endfunction
 
 function! s:repo_tree(...) dict abort
-  let dir = s:Tree(self.git_dir)
-  if dir ==# ''
-    call s:throw('no work tree')
-  else
-    return join([dir]+a:000,'/')
-  endif
+  throw 'fugitive: fugitive#repo().tree() has been replaced by FugitiveFind(":/")'
 endfunction
 
 function! s:repo_bare() dict abort
-  if self.dir() =~# '/\.git$'
-    return 0
-  else
-    return s:Tree(self.git_dir) ==# ''
-  endif
+  throw 'fugitive: fugitive#repo().bare() has been replaced by !empty(FugitiveWorkTree())'
 endfunction
 
 function! s:repo_find(object) dict abort
-  return fugitive#Find(a:object, self.git_dir)
+  throw 'fugitive: fugitive#repo().find(...) has been replaced by FugitiveFind(...)'
 endfunction
 
 function! s:repo_translate(rev) dict abort
-  return s:Slash(fugitive#Find(substitute(a:rev, '^/', ':(top)', ''), self.git_dir))
+  throw 'fugitive: fugitive#repo().translate(...) has been replaced by FugitiveFind(...)'
 endfunction
 
 function! s:repo_head(...) dict abort
-  return fugitive#Head(a:0 ? a:1 : 0, self.git_dir)
+  throw 'fugitive: fugitive#repo().head(...) has been replaced by FugitiveHead(...)'
 endfunction
 
 call s:add_methods('repo',['dir','tree','bare','find','translate','head'])
@@ -1588,36 +1574,24 @@ function! s:repo_git_command(...) dict abort
 endfunction
 
 function! s:repo_git_chomp(...) dict abort
-  return s:sub(system(fugitive#ShellCommand(a:000, self.git_dir)), '\n$', '')
+  throw 'fugitive: fugitive#repo().git_chomp(...) has been replaced by FugitiveExecute(...).stdout'
 endfunction
 
 function! s:repo_git_chomp_in_tree(...) dict abort
-  return call(self.git_chomp, a:000, self)
+  throw 'fugitive: fugitive#repo().git_chomp_in_tree(...) has been replaced by FugitiveExecute(...).stdout'
 endfunction
 
 function! s:repo_rev_parse(rev) dict abort
-  return fugitive#RevParse(a:rev, self.git_dir)
+  throw 'fugitive: fugitive#repo().rev_parse(...) has been replaced by FugitiveExecute("rev-parse", "--verify", ...).stdout'
 endfunction
 
 call s:add_methods('repo',['git_command','git_chomp','git_chomp_in_tree','rev_parse'])
 
-function! s:repo_superglob(base) dict abort
-  return map(fugitive#CompleteObject(a:base, self.git_dir), 'substitute(v:val, ''\\\(.\)'', ''\1'', "g")')
-endfunction
-
-call s:add_methods('repo',['superglob'])
-
 function! s:repo_config(name) dict abort
-  return FugitiveConfigGet(a:name, self.git_dir)
+  throw 'fugitive: fugitive#repo().config(...) has been replaced by FugitiveConfigGet(...)'
 endfunction
 
-function! s:repo_user() dict abort
-  let username = self.config('user.name')
-  let useremail = self.config('user.email')
-  return username.' <'.useremail.'>'
-endfunction
-
-call s:add_methods('repo',['config', 'user'])
+call s:add_methods('repo',['config'])
 
 " Section: File API
 
@@ -1783,8 +1757,8 @@ function! fugitive#Find(object, ...) abort
     let f = len(tree) && len(getftype(tree . '/.git')) ? tree . '/.git' : dir
   elseif rev =~# '^\.git/'
     let f = strpart(rev, 5)
-    let fdir = dir . '/'
-    let cdir = FugitiveCommonDir(dir) . '/'
+    let fdir = simplify(FugitiveActualDir(dir) . '/')
+    let cdir = simplify(FugitiveCommonDir(dir) . '/')
     if f =~# '^\.\./\.\.\%(/\|$\)'
       let f = simplify(len(tree) ? tree . f[2:-1] : fdir . f)
     elseif f =~# '^\.\.\%(/\|$\)'
@@ -1820,14 +1794,16 @@ function! fugitive#Find(object, ...) abort
   elseif rev =~# '^:[0-3]:'
     let f = urlprefix . rev[1] . '/' . rev[3:-1]
   elseif rev ==# ':'
-    let fdir = dir . '/'
+    let fdir = simplify(FugitiveActualDir(dir) . '/')
     let f = fdir . 'index'
-    if len($GIT_INDEX_FILE)
-      let index_dir = substitute($GIT_INDEX_FILE, '[^/]\+$', '', '')
+    if !s:cpath(dir . '/', fdir)
+      let f = urlprefix
+    elseif len($GIT_INDEX_FILE)
+      let index_dir = substitute(s:GitIndexFileEnv(), '[^/]\+$', '', '')
       if s:cpath(index_dir, fdir)
-        let f = FugitiveVimPath($GIT_INDEX_FILE)
-      elseif s:cpath(resolve(FugitiveVimPath(index_dir)), fdir)
-        let f = resolve(FugitiveVimPath($GIT_INDEX_FILE))
+        let f = s:GitIndexFileEnv()
+      elseif s:cpath(resolve(index_dir), fdir)
+        let f = resolve(s:GitIndexFileEnv())
       endif
     endif
   elseif rev =~# '^:(\%(top\|top,literal\|literal,top\|literal\))'
@@ -1962,7 +1938,7 @@ function! s:ExpandVar(other, var, flags, esc, ...) abort
     return expand(a:other)
   elseif a:var ==# '<cfile>'
     let bufnames = [expand('<cfile>')]
-    if v:version >= 704 && get(maparg('<Plug><cfile>', 'c', 0, 1), 'expr')
+    if get(maparg('<Plug><cfile>', 'c', 0, 1), 'expr')
       try
         let bufnames = [eval(maparg('<Plug><cfile>', 'c'))]
         if bufnames[0] ==# "\<C-R>\<C-F>"
@@ -2007,6 +1983,8 @@ function! s:ExpandVar(other, var, flags, esc, ...) abort
   return join(files, "\1")
 endfunction
 
+let s:fnameescape = " \t\n*?[{`$\\%#'\"|!<"
+
 function! s:Expand(rev, ...) abort
   if a:rev =~# '^>' && s:Slash(@%) =~# '^fugitive://' && empty(s:DirCommitFile(@%)[1])
     return s:Slash(@%)
@@ -2024,6 +2002,8 @@ function! s:Expand(rev, ...) abort
     else
       let file = len(expand('%')) ? rev . ':%' : '%'
     endif
+  elseif s:Slash(a:rev) =~# '^\a\a\+://'
+    let file = substitute(a:rev, '\\\@<!\%(#\a\|%\x\x\)', '\\&', 'g')
   else
     let file = a:rev
   endif
@@ -2134,6 +2114,8 @@ function! fugitive#simplify(url) abort
   let [dir, commit, file] = s:DirCommitFile(a:url)
   if empty(dir)
     return ''
+  elseif empty(commit)
+    return s:VimSlash(s:DirUrlPrefix(simplify(s:GitDir(dir))))
   endif
   if file =~# '/\.\.\%(/\|$\)'
     let tree = s:Tree(dir)
@@ -2144,7 +2126,7 @@ function! fugitive#simplify(url) abort
       endif
     endif
   endif
-  return s:VimSlash('fugitive://' . simplify(dir) . '//' . commit . simplify(file))
+  return s:VimSlash(s:DirUrlPrefix(simplify(s:GitDir(dir))) . commit . simplify(file))
 endfunction
 
 function! fugitive#resolve(url) abort
@@ -2345,26 +2327,6 @@ function! fugitive#delete(url, ...) abort
   return len(error) ? -1 : 0
 endfunction
 
-" Section: Buffer Object
-
-let s:buffer_prototype = {}
-
-function! fugitive#buffer(...) abort
-  let buffer = {'#': bufnr(a:0 ? a:1 : '%')}
-  call extend(buffer, s:buffer_prototype, 'keep')
-  return buffer
-endfunction
-
-function! s:buffer_repo() dict abort
-  return fugitive#repo(self['#'])
-endfunction
-
-function! s:buffer_type(...) dict abort
-  return 'see per type events at :help fugitive-autocommands'
-endfunction
-
-call s:add_methods('buffer', ['repo', 'type'])
-
 " Section: Completion
 
 function! s:FilterEscape(items, ...) abort
@@ -2382,10 +2344,8 @@ endfunction
 function! s:GlobComplete(lead, pattern, ...) abort
   if a:lead ==# '/'
     return []
-  elseif v:version >= 704
-    let results = glob(a:lead . a:pattern, a:0 ? a:1 : 0, 1)
   else
-    let results = split(glob(a:lead . a:pattern), "\n")
+    let results = glob(a:lead . a:pattern, a:0 ? a:1 : 0, 1)
   endif
   call map(results, 'v:val !~# "/$" && isdirectory(v:val) ? v:val."/" : v:val')
   call map(results, 'v:val[ strlen(a:lead) : -1 ]')
@@ -2644,7 +2604,7 @@ function! fugitive#BufReadStatus(...) abort
 
     let cmd = [s:Dir()]
     setlocal noreadonly modifiable nomodeline buftype=nowrite
-    if amatch !~# '^fugitive:' && s:cpath(fnamemodify($GIT_INDEX_FILE !=# '' ? FugitiveVimPath($GIT_INDEX_FILE) : fugitive#Find('.git/index'), ':p')) !=# s:cpath(amatch)
+    if amatch !~# '^fugitive:' && s:cpath($GIT_INDEX_FILE !=# '' ? resolve(s:GitIndexFileEnv()) : fugitive#Find('.git/index')) !=# s:cpath(amatch)
       let cmd += [{'env': {'GIT_INDEX_FILE': FugitiveGitPath(amatch)}}]
     endif
 
@@ -2759,11 +2719,11 @@ function! fugitive#BufReadStatus(...) abort
     let diff = {'Staged': {'stdout': ['']}, 'Unstaged': {'stdout': ['']}}
     if len(staged)
       let diff['Staged'] =
-          \ fugitive#Execute(['-c', 'diff.suppressBlankEmpty=false', 'diff', '--color=never', '--no-ext-diff', '--no-prefix', '--cached'], function('len'))
+          \ fugitive#Execute(['-c', 'diff.suppressBlankEmpty=false', '-c', 'core.quotePath=false', 'diff', '--color=never', '--no-ext-diff', '--no-prefix', '--cached'], function('len'))
     endif
     if len(unstaged)
       let diff['Unstaged'] =
-          \ fugitive#Execute(['-c', 'diff.suppressBlankEmpty=false', 'diff', '--color=never', '--no-ext-diff', '--no-prefix'], function('len'))
+          \ fugitive#Execute(['-c', 'diff.suppressBlankEmpty=false', '-c', 'core.quotePath=false', 'diff', '--color=never', '--no-ext-diff', '--no-prefix'], function('len'))
     endif
 
     for dict in staged
@@ -3033,7 +2993,7 @@ function! fugitive#BufReadCmd(...) abort
     if empty(dir)
       return 'echo "Invalid Fugitive URL"'
     endif
-    let b:git_dir = s:GitDir(dir)
+    call s:InitializeBuffer(dir)
     if rev ==# ':'
       return fugitive#BufReadStatus(v:cmdbang)
     elseif rev =~# '^:\d$'
@@ -3230,7 +3190,7 @@ function! s:TempReadPre(file) abort
     endif
     setlocal buftype=nowrite
     setlocal nomodifiable
-    let b:git_dir = dict.git_dir
+    call s:InitializeBuffer(dict)
     if len(dict.git_dir)
       call extend(b:, {'fugitive_type': 'temp'}, 'keep')
     endif
@@ -3335,6 +3295,7 @@ function! s:RunEdit(state, tmp, job) abort
     endif
   endtry
   set bufhidden=wipe
+  call s:InitializeBuffer(a:state)
   let bufnr = bufnr('')
   let s:edit_jobs[bufnr] = [a:state, a:tmp, a:job, sentinel]
   call fugitive#DidChange(a:state.git_dir)
@@ -3752,7 +3713,7 @@ function! fugitive#Command(line1, line2, range, bang, mods, arg, ...) abort
         \ s:HasOpt(args, ['add', 'clean', 'stage'], '-i', '--interactive')) && pager is# 0
   if wants_terminal
     let mods = substitute(s:Mods(a:mods), '\<tab\>', '-tab', 'g')
-    let assign = len(dir) ? '|let b:git_dir = ' . string(options.git_dir) : ''
+    let assign = len(dir) ? "|call FugitiveDetect({'git_dir':" . string(options.git_dir) . '})' : ''
     let argv = s:UserCommandList(options) + args
     let term_opts = len(env) ? {'env': env} : {}
     if has('nvim')
@@ -4286,7 +4247,7 @@ function! fugitive#DidChange(...) abort
   if a:0 > 1 ? a:2 : (!a:0 || a:1 isnot# 0)
     let t = reltime()
     let t:fugitive_reload_status = t
-    for tabnr in exists('*settabvar') ? range(1, tabpagenr('$')) : []
+    for tabnr in range(1, tabpagenr('$'))
       call settabvar(tabnr, 'fugitive_reload_status', t)
     endfor
     call s:ReloadTabStatus()
@@ -4785,35 +4746,28 @@ function! s:StageInline(mode, ...) abort
     endif
     let mode = ''
     let diff = []
-    let index = 0
-    let start = -1
-    for line in fugitive#Wait(b:fugitive_diff[info.section]).stdout
-      if mode ==# 'await' && line[0] ==# '@'
-        let mode = 'capture'
-      endif
-      if mode !=# 'head' && line !~# '^[ @\+-]'
-        if len(diff)
-          break
-        endif
-        let start = index
-        let mode = 'head'
-      elseif mode ==# 'head' && line =~# '^diff '
-        let start = index
-      elseif mode ==# 'head' && substitute(line, "\t$", '', '') ==# '--- ' . info.relative[-1]
-        let mode = 'await'
-      elseif mode ==# 'head' && substitute(line, "\t$", '', '') ==# '+++ ' . info.relative[0]
-        let mode = 'await'
-      elseif mode ==# 'capture'
-        call add(diff, line)
-      elseif line[0] ==# '@'
-        let mode = ''
-      endif
+    if info.status ==# 'U'
+      let diff_header = 'diff --cc ' . s:Quote(info.relative[0])
+    else
+      let diff_header = 'diff --git ' . s:Quote(info.relative[-1]) . ' ' . s:Quote(info.relative[0])
+    endif
+    let stdout = fugitive#Wait(b:fugitive_diff[info.section]).stdout
+    let start = index(stdout, diff_header)
+    if start == -1
+      continue
+    endif
+    let index = start + 1
+    while get(stdout, index, '@@') !~# '^@@\|^diff '
       let index += 1
-    endfor
+    endwhile
+    while get(stdout, index, '') =~# '^[@ +-]'
+      call add(diff, stdout[index])
+      let index += 1
+    endwhile
     if len(diff)
       setlocal modifiable noreadonly
       silent call append(lnum, diff)
-      let b:fugitive_expanded[info.section][info.filename] = [start, len(diff)]
+      let b:fugitive_expanded[info.section][info.filename] = [start]
       setlocal nomodifiable readonly nomodified
       if foldclosed(lnum+1) > 0
         silent exe (lnum+1) . ',' . (lnum+len(diff)) . 'foldopen!'
@@ -6093,7 +6047,7 @@ function! s:BlurStatus() abort
     if len(winnrs)
       exe winnrs[0].'wincmd w'
     else
-      belowright new
+      belowright new +setl\ bufhidden=delete
     endif
     if &diff
       call fugitive#DiffClose()
@@ -6144,9 +6098,6 @@ endfunction
 
 function! fugitive#ReadCommand(line1, count, range, bang, mods, arg, ...) abort
   exe s:VersionCheck()
-  if a:bang
-    return 'echoerr ' . string(':Gread! for temp buffer output has been replaced by :{range}Git! --paginate')
-  endif
   let [read, post] = s:ReadPrepare(a:line1, a:count, a:range, a:mods)
   try
     let [file, pre] = s:OpenParse(a:arg, 0)
@@ -6168,11 +6119,7 @@ function! fugitive#EditComplete(A, L, P) abort
 endfunction
 
 function! fugitive#ReadComplete(A, L, P) abort
-  if a:L =~# '^\w\+!'
-    return fugitive#Complete(a:A, a:L, a:P)
-  else
-    return fugitive#EditComplete(a:A, a:L, a:P)
-  endif
+  return fugitive#EditComplete(a:A, a:L, a:P)
 endfunction
 
 " Section: :Gwrite, :Gwq
@@ -6404,32 +6351,14 @@ function! s:diff_window_count() abort
   return c
 endfunction
 
-function! s:diff_restore() abort
-  let restore = 'setlocal nodiff noscrollbind'
-        \ . ' scrollopt=' . &l:scrollopt
-        \ . (&l:wrap ? ' wrap' : ' nowrap')
-        \ . ' foldlevel=999'
-        \ . ' foldmethod=' . &l:foldmethod
-        \ . ' foldcolumn=' . &l:foldcolumn
-        \ . ' foldlevel=' . &l:foldlevel
-        \ . (&l:foldenable ? ' foldenable' : ' nofoldenable')
-  if has('cursorbind')
-    let restore .= (&l:cursorbind ? ' ' : ' no') . 'cursorbind'
-  endif
-  return restore
-endfunction
-
 function! s:diffthis() abort
   if !&diff
-    let w:fugitive_diff_restore = s:diff_restore()
+    let w:fugitive_diff_restore = 1
     diffthis
   endif
 endfunction
 
 function! s:diffoff() abort
-  if exists('w:fugitive_diff_restore') && v:version < 704
-    execute w:fugitive_diff_restore
-  endif
   unlet! w:fugitive_diff_restore
   diffoff
 endfunction
@@ -6438,12 +6367,6 @@ function! s:diffoff_all(dir) abort
   let curwin = winnr()
   for nr in range(1,winnr('$'))
     if getwinvar(nr, '&diff') && !empty(getwinvar(nr, 'fugitive_diff_restore'))
-      if v:version < 704
-        if nr != winnr()
-          execute nr.'wincmd w'
-        endif
-        execute w:fugitive_diff_restore
-      endif
       call setwinvar(nr, 'fugitive_diff_restore', '')
     endif
   endfor
@@ -6573,15 +6496,14 @@ function! fugitive#Diffsplit(autodir, keepfocus, mods, arg, ...) abort
       let spec = s:VimSlash(spec . s:Relative('/'))
     endif
     exe pre
-    let restore = s:diff_restore()
-    let w:fugitive_diff_restore = restore
+    let w:fugitive_diff_restore = 1
     let mods = (autodir ? s:DiffModifier(2, empty(args) || args[0] =~# '^>') : '') . mods
     if &diffopt =~# 'vertical'
       let diffopt = &diffopt
       set diffopt-=vertical
     endif
     execute mods 'diffsplit' s:fnameescape(spec)
-    let w:fugitive_diff_restore = restore
+    let w:fugitive_diff_restore = 1
     let winnr = winnr()
     if getwinvar('#', '&diff')
       if a:keepfocus
@@ -6723,7 +6645,7 @@ endfunction
 
 function! s:linechars(pattern) abort
   let chars = strlen(s:gsub(matchstr(getline('.'), a:pattern), '.', '.'))
-  if exists('*synconcealed') && &conceallevel > 1
+  if &conceallevel > 1
     for col in range(1, chars)
       let chars -= synconcealed(line('.'), col)[0]
     endfor
@@ -8043,7 +7965,7 @@ function! fugitive#Statusline(...) abort
   if len(commit)
     let status .= ':' . commit[0:6]
   endif
-  let status .= '('.FugitiveHead(7, dir).')'
+  let status .= '('.fugitive#Head(7, dir).')'
   return '[Git'.status.']'
 endfunction
 
@@ -8100,24 +8022,6 @@ endfunction
 
 function! fugitive#foldtext() abort
   return fugitive#Foldtext()
-endfunction
-
-" Section: Initialization
-
-function! fugitive#Init() abort
-  throw 'Third party code is using fugitive#Init() which has been removed. Contact the author if you have a reason to still use it'
-endfunction
-
-function! fugitive#is_git_dir(path) abort
-  throw 'Third party code is using fugitive#is_git_dir() which has been removed. Change it to FugitiveIsGitDir()'
-endfunction
-
-function! fugitive#extract_git_dir(path) abort
-  throw 'Third party code is using fugitive#extract_git_dir() which has been removed. Change it to FugitiveExtractGitDir()'
-endfunction
-
-function! fugitive#detect(path) abort
-  throw 'Third party code is using fugitive#detect() which has been removed. Contact the author if you have a reason to still use it'
 endfunction
 
 " Section: End
